@@ -1,16 +1,14 @@
-/* lightningcss-plugin-env */
-
 import fs from 'node:fs'
 import { extname } from 'node:path'
 
 import { composeVisitors } from 'lightningcss'
 
-import mixins from './mixins.js'
+import { createMixinVisitor } from './mixins.js'
 
 /**
  * @typedef {import("lightningcss").CustomAtRules} CustomAtRules
- * @typedef {import("lightningcss").Visitor<CustomAtRules>["Function"]} FunctionVisitor
  * @typedef {import("lightningcss").Visitor<CustomAtRules>} CustomVisitor
+ * @typedef {{ warn(message: string, options?: { clear?: boolean, timestamp?: boolean }): void }} Logger
  */
 
 /**
@@ -82,14 +80,15 @@ const inline = {
     },
 }
 
-export default composeVisitors([mixins, inline])
+export const createVisitor = () => composeVisitors([createMixinVisitor(), inline])
+
+export default createVisitor()
 
 export const vitePluginDisableWarnings = {
     name: 'lightningcss-mixin-warnings',
-    // @ts-ignore
+    /** @param {{ logger: Logger }} config */
     configResolved(config) {
         const warn = config.logger.warn.bind(config.logger)
-        // @ts-ignore
         config.logger.warn = (message, options) => {
             if (/\[vite:css\]\[lightningcss\] Unknown at rule: @(?:define|apply)(?:\r?\n|$)/u.test(message)) {
                 return

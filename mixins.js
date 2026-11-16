@@ -1,607 +1,303 @@
-/* lightningcss-plugin-env */
+import { transformStyleAttribute } from 'lightningcss'
 
 /**
- * @typedef {import("lightningcss").UnknownAtRule} UnknownAtRule
- * @typedef {import("lightningcss").ReturnedRule} ReturnedRule
- * @typedef {import("lightningcss").CustomAtRules} CustomAtRules
- * @typedef {import("lightningcss").Visitor<CustomAtRules>} CustomVisitor
- * @typedef {import("lightningcss").TokenOrValue} TokenOrValue
- * @typedef {import("lightningcss").Token} Token
- * @typedef {import("lightningcss").Location2} Location2
- * @typedef {import("lightningcss").CssColor} CssColor
- * @typedef {import("lightningcss").SystemColor} SystemColor
- * @typedef {import("lightningcss").ReturnedDeclaration} ReturnedDeclaration
+ * @typedef {import('lightningcss').TokenOrValue} TokenOrValue
+ * @typedef {import('lightningcss').UnknownAtRule} UnknownAtRule
+ * @typedef {import('lightningcss').ReturnedDeclaration} ReturnedDeclaration
+ * @typedef {import('lightningcss').Visitor<import('lightningcss').CustomAtRules>} CustomVisitor
+ * @typedef {{ name: string, args: TokenOrValue[][] }} Call
+ * @typedef {{ name: string, fallback: TokenOrValue[] }} Parameter
+ * @typedef {{ type: 'declaration', name: string, value: TokenOrValue[] } | { type: 'apply', call: Call }} Statement
+ * @typedef {{ name: string, params: Parameter[], statements: Statement[] }} Mixin
  */
 
+/** @param {TokenOrValue | undefined} item */
+const isWhitespace = (item) => item?.type === 'token' && ['white-space', 'comment'].includes(item.value.type)
+
+/** @param {TokenOrValue[]} tokens */
+const trim = (tokens) => {
+    let start = 0
+    let end = tokens.length
+    while (start < end && isWhitespace(tokens[start])) start++
+    while (end > start && isWhitespace(tokens[end - 1])) end--
+    return tokens.slice(start, end)
+}
+
 /**
- * @typedef {{
- *   name: string;
- *   params: [ReturnedDeclaration["property"] | null, TokenOrValue[]][];
- *   blocks: [ReturnedDeclaration["property"] | null, TokenOrValue[]][];
- *   loc: Location2;
- * }} Mixin
+ * @param {TokenOrValue | undefined} item
+ * @param {import('lightningcss').Token['type']} type
  */
-export const createMixinVisitor = () => {
-    /** @type {Map<ReturnedDeclaration["property"], Mixin>} */
-    const mixins = new Map()
-    /** @type {(rule: UnknownAtRule) => ReturnedRule[]} */
-    const define = (rule) => {
-        if (process.env.DEBUG) {
-            console.trace('rule', rule.name, rule)
+const isToken = (item, type) => item?.type === 'token' && item.value.type === type
+
+/** @param {TokenOrValue | undefined} item */
+const identifier = (item) => {
+    if (item?.type === 'token' && item.value.type === 'ident') return item.value.value
+    if (item?.type === 'dashed-ident') return item.value
+    throw new Error('expected an identifier')
+}
+
+/**
+ * Functions are already grouped by Lightning CSS; brackets remain flat tokens.
+ * @param {TokenOrValue[]} tokens
+ * @param {'comma' | 'semicolon'} separator
+ * @returns {TokenOrValue[][]}
+ */
+const split = (tokens, separator) => {
+    /** @type {TokenOrValue[][]} */
+    const result = []
+    let start = 0
+    let depth = 0
+    for (let index = 0; index < tokens.length; index++) {
+        const item = tokens[index]
+        if (item?.type !== 'token') continue
+        if (['parenthesis-block', 'square-bracket-block', 'curly-bracket-block'].includes(item.value.type)) depth++
+        if (['close-parenthesis', 'close-square-bracket', 'close-curly-bracket'].includes(item.value.type)) depth--
+        if (depth === 0 && item.value.type === separator) {
+            result.push(trim(tokens.slice(start, index)))
+            start = index + 1
         }
-        try {
-            if (!rule.block || rule.block.length === 0) {
-                throw new Error(`expected a block`)
-            }
-            const blocks = parseBlock(rule.block)
-            let name
-            /** @type {Mixin["params"]} */
-            let params = []
-            switch (rule.prelude[0]?.type) {
-                case 'function': {
-                    name = parseProperty(rule.prelude[0].value.name)
-                    params = parseParams([rule.prelude[0]])
-                    break
-                }
-                case 'token': {
-                    switch (rule.prelude[0].value.type) {
-                        case 'ident': {
-                            name = parseProperty(rule.prelude[0].value.value)
-                            break
-                        }
-                        default: {
-                            throw new Error(`unexpected token: "${rule.prelude[0].value.type}"`)
-                        }
-                    }
-                    break
-                }
-                default: {
-                    throw new Error(`unexpected item: "${rule.prelude[0]?.type}"`)
-                }
-            }
-            if (mixins.has(name)) {
-                // console.error(`mixin already defined: ${name}`)
-                return []
-            }
-            if (process.env.DEBUG) {
-                console.trace(`registering mixin @${name}`, JSON.stringify({ params, blocks }))
-            }
-            const mixin = {
-                name: name,
-                params: params,
-                blocks: blocks,
-                loc: rule.loc,
-            }
-            mixins.set(name, mixin)
-        } catch (error) {
-            throw new Error(`${rule.name} at ${rule.loc.line}:${rule.loc.column}: ${error}`, {
-                cause: error,
-            })
-        }
-        return []
     }
+    result.push(trim(tokens.slice(start)))
+    return result
+}
 
-    /** @type {(rule: UnknownAtRule) => ReturnedRule[]} */
-    const apply = (rule) => {
-        if (process.env.DEBUG) {
-            console.trace('rule', rule.name, rule)
-        }
-        try {
-            if (!rule.name) {
-                throw new Error(`expected a name`)
-            }
-            if (rule.block?.length) {
-                throw new Error(`unexpected block`)
-            }
-            let name
-            /** @type {Mixin["params"]} */
-            let params = []
-            switch (rule.prelude[0]?.type) {
-                case 'function': {
-                    name = parseProperty(rule.prelude[0].value.name)
-                    params = parseParams([rule.prelude[0]])
-                    break
-                }
-                // @ts-expect-error fallthrough is intentional
-                case 'token': {
-                    if ('value' in rule.prelude[0].value && typeof rule.prelude[0].value.value === 'string') {
-                        name = parseProperty(rule.prelude[0].value.value)
-                        break
-                    }
-                }
-                // eslint-disable-next-line no-fallthrough
-                default: {
-                    throw new Error(`unexpected item: "${rule.prelude[0]?.type}"`)
-                }
-            }
-            const mixin = mixins.get(name)
-            if (!mixin) {
-                throw new Error(`mixin not found: ${name}`)
-            }
-            if (params.length > mixin.params.length) {
-                throw new Error(`mixin ${name} expected at most ${mixin.params.length} arguments, got ${params.length}`)
-            }
-            if (process.env.DEBUG) {
-                console.trace('mixin:', mixin, 'params:', params)
-            }
-            /**
-             * @param {Mixin} mixin
-             * @param {Mixin["params"]} params
-             * @param {string[]} ancestors
-             */
-            const applyMixin = (mixin, params, ancestors = []) => {
-                if (ancestors.includes(mixin.name)) {
-                    throw new Error(`circular mixin application: ${[...ancestors, mixin.name].join(' -> ')}`)
-                }
-                const chain = [...ancestors, mixin.name]
-                /** @type {ReturnedDeclaration[]} */
-                const applied = []
-                for (let index = 0; index < mixin.blocks.length; index++) {
-                    const current = mixin.blocks[index]
-                    if (!current) {
-                        continue
-                    }
-                    const [name, value] = current
-                    if (!name) {
-                        const first = value[0]
-                        if (!first) {
-                            console.error(`declaration has no name or value`)
-                            continue
-                        }
-                        let next
-                        switch (first.type) {
-                            case 'token': {
-                                if (first.value.type === 'at-keyword') {
-                                    switch (first.value.value) {
-                                        case 'apply': {
-                                            next = value[0]
-                                            break
-                                        }
-                                        default: {
-                                            throw new Error(`unexpected at-keyword: "${first.value.value}"`)
-                                        }
-                                    }
-                                }
-                                break
-                            }
-                            case 'function': {
-                                next = first
-                                break
-                            }
-                            default: {
-                                break
-                            }
-                        }
-                        if (!next) {
-                            throw new Error(`expected a value in mixin: "${mixin.name}"`)
-                        }
-                        if (next.type !== 'function') {
-                            throw new Error(`expected a function, got ${next.type}`)
-                        }
-                        const params = parseParams([next])
-                        const ident = parseProperty(next.value.name)
-                        const nested = mixins.get(ident)
-                        if (!nested) {
-                            throw new Error(`mixin not found: ${ident}`)
-                        }
-                        if (params.length > nested.params.length) {
-                            throw new Error(`expected at most ${nested.params.length} arguments, got ${params.length}`)
-                        }
-                        applied.push(...applyMixin(nested, params, chain))
-                    } else {
-                        if (!value[0]) {
-                            throw new Error(`expected a value for property: "${name}"`)
-                        }
-                        if (value.length === 1) {
-                            applied.push({
-                                property: name,
-                                raw: stringifyProperty(value[0]),
-                            })
-                        } else if (
-                            value.length === 2 &&
-                            value[0]?.type === 'token' &&
-                            value[0].value.type === 'delim' &&
-                            value[0].value.value === '$' &&
-                            value[1]?.type === 'token' &&
-                            value[1].value.type === 'ident'
-                        ) {
-                            const ident = value[1].value.value
-                            const param = mixin.params.findIndex((p) => p[0] === ident)
-                            if (param === -1) {
-                                throw new Error(
-                                    `unexpected variable: "${ident}", expected one of: ${mixin.params.map((p) => p[0]).join(', ')}`
-                                )
-                            }
-                            let arg = params[param]?.[0] ?? ''
-                            if (!arg) {
-                                const placeholder = mixin.params[param]?.[1]?.[0]
-                                if (!placeholder) {
-                                    throw new Error(`expected a value for argument: "${ident}"`)
-                                }
-                                arg = stringifyProperty(placeholder)
-                            }
-                            applied.push({
-                                property: name,
-                                raw: arg,
-                            })
-                        } else {
-                            throw new Error(
-                                `expected exactly one value for property: "${name}", got ${value.length}: ${JSON.stringify(value)}`
-                            )
-                        }
-                    }
-                }
-                return applied
-            }
-            /** @type {ReturnedDeclaration[]} */
-            const declarations = applyMixin(mixin, params).filter((x) => !!x)
-            return [
-                {
-                    type: 'layer-block',
-                    value: {
-                        loc: rule.loc,
-                        rules: [
-                            {
-                                type: 'style',
-                                value: {
-                                    loc: rule.loc,
-                                    selectors: [[{ type: 'nesting' }]],
-                                    declarations: {
-                                        declarations,
-                                    },
-                                },
-                            },
-                        ],
-                    },
+/** @param {TokenOrValue[]} tokens @returns {Call} */
+const parseCall = (tokens) => {
+    const items = trim(tokens)
+    if (items.length !== 1) throw new Error('expected exactly one mixin name or function')
+    const item = items[0]
+    if (item?.type !== 'function') return { name: identifier(item), args: [] }
+    const args = trim(item.value.arguments).length ? split(item.value.arguments, 'comma') : []
+    if (args.some((arg) => arg.length === 0)) throw new Error('expected a value for every argument')
+    return { name: item.value.name, args }
+}
+
+/** @param {TokenOrValue[][]} args @returns {Parameter[]} */
+const parseParameters = (args) => {
+    const names = new Set()
+    return args.map((arg) => {
+        const name = identifier(arg[0])
+        if (names.has(name)) throw new Error(`duplicate parameter: ${name}`)
+        names.add(name)
+        const rest = trim(arg.slice(1))
+        if (rest.length && !isToken(rest[0], 'colon')) throw new Error(`expected a colon after parameter: ${name}`)
+        const fallback = trim(rest.slice(1))
+        if (rest.length && !fallback.length) throw new Error(`expected a default value for parameter: ${name}`)
+        return { name, fallback }
+    })
+}
+
+/** @param {TokenOrValue[]} block @returns {Statement[]} */
+const parseBlock = (block) => split(block, 'semicolon').filter((tokens) => tokens.length).map((tokens) => {
+    const first = tokens[0]
+    if (first?.type === 'token' && first.value.type === 'at-keyword') {
+        if (first.value.value !== 'apply') throw new Error(`unexpected at-rule in mixin: @${first.value.value}`)
+        return { type: 'apply', call: parseCall(tokens.slice(1)) }
+    }
+    const name = identifier(first)
+    const rest = trim(tokens.slice(1))
+    if (!isToken(rest[0], 'colon')) throw new Error(`expected a colon after property: ${name}`)
+    const value = trim(rest.slice(1))
+    if (!value.length && !name.startsWith('--')) throw new Error(`expected a value for property: "${name}"`)
+    return { type: 'declaration', name, value }
+})
+
+/**
+ * Keep values as native tokens, including function arguments and variable fallbacks.
+ * @param {TokenOrValue[]} tokens
+ * @param {Map<string, TokenOrValue[]>} bindings
+ * @returns {TokenOrValue[]}
+ */
+const substitute = (tokens, bindings) => {
+    /** @type {TokenOrValue[]} */
+    const result = []
+    for (let index = 0; index < tokens.length; index++) {
+        const item = tokens[index]
+        if (!item) continue
+        if (item.type === 'token' && item.value.type === 'delim' && item.value.value === '$') {
+            const name = identifier(tokens[++index])
+            const value = bindings.get(name)
+            if (!value) throw new Error(`unexpected variable: "${name}"`)
+            result.push(...value)
+        } else if (item.type === 'function') {
+            result.push({ ...item, value: { ...item.value, arguments: substitute(item.value.arguments, bindings) } })
+        } else if (item.type === 'var') {
+            result.push({
+                ...item,
+                value: {
+                    // Lightning CSS emits null here but requires omission when deserializing.
+                    name: item.value.name.from ? item.value.name : { ident: item.value.name.ident },
+                    ...(item.value.fallback ? { fallback: substitute(item.value.fallback, bindings) } : {}),
                 },
-            ]
-        } catch (error) {
-            throw new Error(`${rule.name} at ${rule.loc.line}:${rule.loc.column}: ${error}`, {
-                cause: error,
             })
+        } else if (item.type === 'env') {
+            const name = item.value.name
+            result.push({
+                ...item,
+                value: {
+                    ...item.value,
+                    name: name.type === 'custom' && !name.from ? { type: 'custom', ident: name.ident } : name,
+                    ...(item.value.fallback ? { fallback: substitute(item.value.fallback, bindings) } : {}),
+                },
+            })
+        } else if (item.type === 'unresolved-color') {
+            const color = item.value
+            result.push({
+                ...item,
+                value: color.type === 'light-dark'
+                    ? { ...color, light: substitute(color.light, bindings), dark: substitute(color.dark, bindings) }
+                    : { ...color, alpha: substitute(color.alpha, bindings) },
+            })
+        } else {
+            result.push(item)
         }
     }
-    /** @type {CustomVisitor} */
-    const visitor = {
+    return result
+}
+
+/**
+ * Use Lightning CSS's serializer rather than reimplementing CSS escaping and colors.
+ * @param {TokenOrValue[]} value
+ */
+const stringify = (value) => {
+    const result = transformStyleAttribute({
+        code: Buffer.from('--value: 0'),
+        visitor: {
+            Declaration() {
+                return { property: 'custom', value: { name: '--value', value } }
+            },
+        },
+    }).code.toString()
+    return result.slice(result.indexOf(':') + 1).replace(/;$/u, '').trim()
+}
+
+/** @param {TokenOrValue} property */
+export const stringifyProperty = (property) => stringify(substitute([property], new Map()))
+
+/** @param {import('lightningcss').CssColor} color */
+export const stringifyColor = (color) => stringifyProperty({ type: 'color', value: color })
+
+/**
+ * @param {string} name
+ * @returns {name is Extract<ReturnedDeclaration, { raw: string }>['property']}
+ */
+const isPropertyName = (name) => /^[-_a-z]/u.test(name)
+
+/** @returns {CustomVisitor} */
+export const createMixinVisitor = () => {
+    /** @type {Map<string, Mixin>} */
+    const mixins = new Map()
+    let styleDepth = 0
+
+    /**
+     * @param {Call} call
+     * @param {string[]} ancestors
+     * @returns {import('lightningcss').DeclarationBlock<ReturnedDeclaration>}
+     */
+    const expand = (call, ancestors = []) => {
+        const mixin = mixins.get(call.name)
+        if (!mixin) throw new Error(`mixin not found: ${call.name}`)
+        if (ancestors.includes(call.name)) {
+            throw new Error(`circular mixin application: ${[...ancestors, call.name].join(' -> ')}`)
+        }
+        if (call.args.length > mixin.params.length) {
+            throw new Error(`mixin ${call.name} expected at most ${mixin.params.length} arguments, got ${call.args.length}`)
+        }
+        /** @type {Map<string, TokenOrValue[]>} */
+        const bindings = new Map()
+        mixin.params.forEach((param, index) => {
+            const value = substitute(call.args[index] ?? param.fallback, bindings)
+            if (!value.length) throw new Error(`expected a value for argument: "${param.name}"`)
+            bindings.set(param.name, value)
+        })
+        /** @type {ReturnedDeclaration[]} */
+        const declarations = []
+        /** @type {ReturnedDeclaration[]} */
+        const importantDeclarations = []
+        for (const statement of mixin.statements) {
+            if (statement.type === 'apply') {
+                const nested = expand({
+                    name: statement.call.name,
+                    args: statement.call.args.map((arg) => substitute(arg, bindings)),
+                }, [...ancestors, call.name])
+                declarations.push(...(nested.declarations ?? []))
+                importantDeclarations.push(...(nested.importantDeclarations ?? []))
+                continue
+            }
+            let value = trim(substitute(statement.value, bindings))
+            const last = value.at(-1)
+            let important = false
+            if (last?.type === 'token' && last.value.type === 'ident' && last.value.value.toLowerCase() === 'important') {
+                const before = trim(value.slice(0, -1))
+                const bang = before.at(-1)
+                if (bang?.type === 'token' && bang.value.type === 'delim' && bang.value.value === '!') {
+                    important = true
+                    value = trim(before.slice(0, -1))
+                }
+            }
+            if (!value.length && !statement.name.startsWith('--')) {
+                throw new Error(`expected a value for property: "${statement.name}"`)
+            }
+            const name = statement.name.startsWith('--') ? statement.name : statement.name.toLowerCase()
+            /** @type {ReturnedDeclaration} */
+            const declaration = isPropertyName(name)
+                ? { property: name, raw: stringify(value) }
+                : { property: 'custom', value: { name, value } }
+            ;(important ? importantDeclarations : declarations).push(declaration)
+        }
+        return { declarations, importantDeclarations }
+    }
+
+    /**
+     * @param {UnknownAtRule} rule
+     * @param {() => import('lightningcss').ReturnedRule[]} callback
+     */
+    const atRule = (rule, callback) => {
+        try {
+            return callback()
+        } catch (error) {
+            throw new Error(`${rule.name} at ${rule.loc.line + 1}:${rule.loc.column}: ${error}`, { cause: error })
+        }
+    }
+
+    return {
         StyleSheet() {
             mixins.clear()
+            styleDepth = 0
         },
         Rule: {
+            style() {
+                styleDepth++
+            },
             unknown: {
-                define,
-                apply,
+                define(rule) {
+                    return atRule(rule, () => {
+                        if (!rule.block) throw new Error('expected a block')
+                        const call = parseCall(rule.prelude)
+                        if (mixins.has(call.name)) throw new Error(`mixin already defined: ${call.name}`)
+                        mixins.set(call.name, {
+                            name: call.name,
+                            params: parseParameters(call.args),
+                            statements: parseBlock(rule.block),
+                        })
+                        return []
+                    })
+                },
+                apply(rule) {
+                    return atRule(rule, () => {
+                        if (rule.block != null) throw new Error('unexpected block')
+                        if (!styleDepth) throw new Error('@apply must be inside a style rule')
+                        return [{
+                            type: 'nested-declarations',
+                            value: { loc: rule.loc, declarations: expand(parseCall(rule.prelude)) },
+                        }]
+                    })
+                },
             },
         },
-    }
-    return visitor
-}
-
-/**
- * @param {string?} property
- * @param {boolean?} verify
- * @returns {ReturnedDeclaration["property"]}
- */
-const parseProperty = (property, verify = true) => {
-    if (!property) {
-        throw new Error(`expected a property`)
-    }
-    if (verify && !/^[-_a-z@]/u.test(property)) {
-        throw new Error(`invalid property: "${property}"`)
-    }
-    // @ts-ignore property has been validated
-    return property
-}
-/**
- * @param {TokenOrValue[]} list
- * @param {Token["type"]} separator
- * @returns {Mixin["blocks"]}
- */
-const parseDeclarationList = (list, separator) => {
-    const split = list
-        .reduce(
-            /**
-             * @param {Mixin["blocks"]} acc
-             * @param {TokenOrValue} item
-             * @returns {Mixin["blocks"]}
-             */
-            (acc, item) => {
-                if (!item) {
-                    return acc
-                }
-                const prev = acc.at(-1)
-                switch (item.type) {
-                    case 'token': {
-                        switch (item.value.type) {
-                            case 'white-space': {
-                                break
-                            }
-                            case 'colon': {
-                                const first = prev?.[1].shift()
-                                if (!prev || !first) {
-                                    throw new Error(`unexpected item in declaration: "colon", expected name`)
-                                }
-                                switch (first.type) {
-                                    case 'token': {
-                                        if (first.value.type === 'ident') {
-                                            prev[0] = parseProperty(first.value.value)
-                                        } else {
-                                            throw new Error(`unexpected item in declaration: "${first.type}"`)
-                                        }
-                                        break
-                                    }
-                                    case 'function': {
-                                        prev[0] = parseProperty(first.value.name)
-                                        break
-                                    }
-                                    default: {
-                                        throw new Error(`unexpected item in declaration: "${first.type}"`)
-                                    }
-                                }
-                                break
-                            }
-                            case separator: {
-                                if (!acc[0]) {
-                                    const first = acc.shift()
-                                    if (first) {
-                                        if (first[0] || first[1].length > 0) {
-                                            acc.push(first)
-                                        }
-                                    } else {
-                                        throw new Error(`unexpected item in declaration: "${item.type}", expected name`)
-                                    }
-                                } else if (acc[0] || (acc[1] && acc[1].length > 0)) {
-                                    acc.push([null, []])
-                                }
-                                break
-                            }
-                            default: {
-                                acc.at(-1)?.[1].push(item)
-                                break
-                            }
-                        }
-                        break
-                    }
-                    default: {
-                        if (prev) {
-                            prev[1].push(item)
-                        } else {
-                            throw new Error(`unexpected item in declaration: "${item.type}", expected name`)
-                        }
-                        break
-                    }
-                }
-                return acc
-            },
-            [[null, []]]
-        )
-        .filter(([name, value]) => name || value.length > 0)
-    while (!split[0]?.[0] && split[0]?.[1].length === 0) {
-        split.shift()
-    }
-    return split
-}
-
-/**
- * @param {TokenOrValue[]} block
- * @returns {Mixin["blocks"]}
- */
-const parseBlock = (block) => {
-    const split = parseDeclarationList(block, 'semicolon')
-    for (const prev of split) {
-        if (prev[0] || prev[1].length === 0) {
-            continue
-        }
-
-        const first = prev?.[1].shift()
-        if (!first) {
-            throw new Error(`unexpected item in block: "colon", expected name`)
-        }
-        switch (first.type) {
-            case 'token': {
-                if (first.value.type === 'ident') {
-                    prev[0] = parseProperty(first.value.value)
-                } else if (first.value.type === 'at-keyword') {
-                    //
-                } else {
-                    throw new Error(`unexpected token in block: "${first.value.type}"`)
-                }
-                break
-            }
-            case 'function': {
-                prev[0] = parseProperty(first.value.name)
-                break
-            }
-            default: {
-                throw new Error(`unexpected item in block: "${first.type}"`)
-            }
-        }
-    }
-    return split
-}
-
-/**
- * @param {TokenOrValue[]} params
- * @returns {Mixin["params"]}
- * @satifies {(params: TokenOrValue[]): params.length === 1}
- */
-const parseParams = (params) => {
-    if (params.length !== 1 || !params[0]) {
-        throw new Error(`expected exactly one argument, got ${params.length}`)
-    }
-    const param = params[0]
-    if (param.type !== 'function') {
-        if (param.type === 'token' && param.value.type === 'ident') {
-            return [[parseProperty(param.value.value), []]]
-        }
-        throw new Error(`expected a function, got ${param.type}`)
-    }
-    const split = parseDeclarationList(param.value.arguments, 'comma')
-    for (const prev of split) {
-        if (prev[0] || prev[1].length === 0) {
-            continue
-        }
-
-        const current = prev?.[1].shift()
-        if (!current) {
-            throw new Error(`unexpected item in params: "colon", expected name`)
-        }
-        switch (current.type) {
-            case 'token': {
-                switch (current.value.type) {
-                    case 'ident': {
-                        prev[0] = parseProperty(current.value.value, false)
-                        while (prev[1].length > 0) {
-                            const next = prev[1].shift()
-                            if (!next) {
-                                break
-                            }
-                            prev[0] += ', ' + stringifyProperty(next)
-                        }
-                        break
-                    }
-                    default: {
-                        throw new Error(`unexpected token in params: "${current.value.type}"`)
-                    }
-                }
-                break
-            }
-            case 'function': {
-                prev[0] = parseProperty(current.value.name, false)
-                break
-            }
-            default: {
-                prev[0] = parseProperty(stringifyProperty(current), false)
-            }
-        }
-    }
-    return split
-}
-
-/**
- * Converts a token or value into a string.
- *
- * @param {TokenOrValue} property
- * @returns {string}
- */
-export const stringifyProperty = (property) => {
-    switch (property.type) {
-        case 'token': {
-            switch (property.value.type) {
-                case 'ident':
-                case 'white-space':
-                case 'delim':
-                case 'number':
-                case 'function': {
-                    return String(property.value.value)
-                }
-                case 'string': {
-                    return `"${property.value.value}"`
-                }
-                case 'hash': {
-                    return `#${property.value.value}`
-                }
-                case 'percentage': {
-                    return `${property.value.value * 100}%`
-                }
-                case 'at-keyword': {
-                    return `@${property.value.value}`
-                }
-                case 'comment': {
-                    return `/*${property.value.value}*/`
-                }
-                case 'unquoted-url': {
-                    return property.value.value
-                }
-                case 'colon': {
-                    return `:`
-                }
-                case 'comma': {
-                    return `,`
-                }
-                case 'semicolon': {
-                    return `;`
-                }
-                default: {
-                    throw new Error(`stringify: unexpected token: "${property.value.type}"`)
-                }
-            }
-        }
-        case 'function': {
-            return `${property.value.name}(${property.value.arguments.map(stringifyProperty).join(', ')})`
-        }
-        case 'color': {
-            return stringifyColor(property.value)
-        }
-        case 'url': {
-            return `url("${property.value.url}")`
-        }
-        case 'var': {
-            return `var(${property.value.name.ident}${property.value.fallback ? property.value.fallback?.map(stringifyProperty).join(', ') : ''})`
-        }
-        case 'time': {
-            return `${property.value.value}${property.value.type === 'seconds' ? 's' : 'ms'}`
-        }
-        case 'dashed-ident': {
-            return `--${property.value}`
-        }
-        default: {
-            throw new Error(`stringify: unexpected property: "${property.type}"`)
-        }
-    }
-}
-
-/**
- * Converts a color into a string.
- *
- * @param {CssColor} color
- * @returns {string}
- */
-export const stringifyColor = (color) => {
-    if (typeof color === 'string') {
-        return color
-    }
-    if (color.type === 'currentcolor') {
-        return 'currentcolor'
-    }
-    if (color.type === 'light-dark') {
-        return `light-dark(${color.light}, ${color.dark})`
-    }
-    /** @type {Exclude<CssColor, SystemColor>['type'][]} */
-    const simple = ['rgb', 'hsl', 'hwb', 'lab', 'lch', 'srgb', 'xyz-d50', 'xyz-d65']
-    for (const key of simple) {
-        if (color.type === key) {
-            const keys = [...key].filter((k) => /^[a-z]$/u.test(k)).map((k) => k)
-            // @ts-ignore reading the keys from the color object property has been validated
-            const values = keys.map((k) => color[k] ?? null).filter((v) => v !== null)
-            return `${key}(${values.join(', ')}, ${color.alpha})`
-        }
-    }
-    switch (color.type) {
-        case 'srgb-linear': {
-            return `srgb(${color.r} ${color.g} ${color.b} / ${color.alpha})`
-        }
-        case 'oklab': {
-            return `oklab(${color.l} ${color.a} ${color.b} / ${color.alpha})`
-        }
-        case 'oklch': {
-            return `oklch(${color.l} ${color.c} ${color.h} / ${color.alpha})`
-        }
-        case 'display-p3': {
-            return `display-p3(${color.r} ${color.g} ${color.b} / ${color.alpha})`
-        }
-        case 'rec2020': {
-            return `rec2020(${color.r} ${color.g} ${color.b} / ${color.alpha})`
-        }
-        case 'a98-rgb': {
-            return `a98-rgb(${color.r} ${color.g} ${color.b} / ${color.alpha})`
-        }
-        case 'prophoto-rgb': {
-            return `prophoto-rgb(${color.r} ${color.g} ${color.b} / ${color.alpha})`
-        }
-        default: {
-            console.warn(`unknown color type "${color.type}" for color`, color)
-            return JSON.stringify(color)
-        }
+        RuleExit(rule) {
+            if (rule.type === 'style') styleDepth--
+        },
     }
 }
 

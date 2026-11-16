@@ -1,27 +1,54 @@
 {
     "$schema": "https://json.schemastore.org/package.json",
-    "name": "@plt/lightningcss-mixins",
+    "name": "lightningcss-mixins",
     "version": "0.0.1",
+    "description": "Parameterized CSS mixins and inline assets for Lightning CSS.",
     "license": "BSD-2-Clause",
-    "private": true,
     "type": "module",
     "main": "index.js",
     "types": "index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./index.d.ts",
+            "import": "./index.js",
+            "default": "./index.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "index.js",
+        "index.d.ts",
+        "mixins.js",
+        "README.md",
+        "LICENSE"
+    ],
+    "sideEffects": false,
+    "publishConfig": {
+        "access": "public"
+    },
+    "keywords": [
+        "css",
+        "lightningcss",
+        "mixins",
+        "vite"
+    ],
     "scripts": {
         "check": "tsc --noEmit",
-        "test": "node --test *.test.js"
+        "test": "node --test index.test.js",
+        "test:package": "node --test package.test.js",
+        "validate": "npm run check && npm test && npm run test:package",
+        "prepack": "npm run check && npm test",
+        "prepublishOnly": "npm run validate"
     },
     "engines": {
         "node": ">= 22"
     },
-    "dependencies": {
-        "lightningcss": "^1.33.0"
-    },
     "devDependencies": {
         "@types/node": "^24.19.2",
+        "lightningcss": "^1.33.0",
         "typescript": "^6.0.3"
     },
     "peerDependencies": {
-        "lightningcss": "^1.28.2"
+        "lightningcss": "^1.33.0"
     }
 }
