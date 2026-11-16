@@ -1,0 +1,45 @@
+# dependencies
+**/node_modules
+**/.pnp
+**/.pnp.js
+
+# testing
+**/coverage
+
+# production
+**/build
+**/target
+**/dist
+**/out
+
+# misc
+**/.DS_Store
+**/desktop.ini
+**/Thumbs.db
+**/*.pem
+**/*.log
+**/*.temp
+**/*.tmp
+
+# local configuration
+.vscode/
+.idea/
+
+# environment variables
+.env
+.env.*
+!.env.example
+
+# development
+**/.turbo
+**/.vercel
+**/.netlify
+**/.astro
+native/gen/
+native/target/
+
+# lockfiles
+**/yarn.lock
+**/package-lock.json
+**/pnpm-lock.yaml
+**/Cargo.lock

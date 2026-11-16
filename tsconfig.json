@@ -1,0 +1,70 @@
+{
+    "$schema": "https://json.schemastore.org/tsconfig",
+    "compilerOptions": {
+        "lib": [
+            "ESNext",
+            "WebWorker",
+            "DOM"
+        ],
+        "target": "es2025",
+        "module": "esnext",
+        "allowJs": true,
+        "allowSyntheticDefaultImports": true,
+        "allowImportingTsExtensions": true,
+        "checkJs": true,
+        "composite": false,
+        "declaration": true,
+        "declarationMap": false,
+        "esModuleInterop": true,
+        "verbatimModuleSyntax": true,
+        "forceConsistentCasingInFileNames": true,
+        "incremental": true,
+        "tsBuildInfoFile": "${configDir}/node_modules/.cache/tsconfig.tsbuildinfo",
+        "inlineSources": false,
+        "importHelpers": false,
+        "isolatedModules": true,
+        "moduleResolution": "Bundler",
+        "resolvePackageJsonExports": true,
+        "resolveJsonModule": true,
+        "preserveWatchOutput": true,
+        "skipLibCheck": true,
+        "strict": true,
+        "strictNullChecks": true,
+        "noFallthroughCasesInSwitch": true,
+        "noUncheckedIndexedAccess": true,
+        "noUnusedLocals": false,
+        "noUnusedParameters": false,
+        "exactOptionalPropertyTypes": false,
+        "noEmit": true,
+        "jsx": "preserve",
+        "experimentalDecorators": true,
+        "useDefineForClassFields": true,
+        "useUnknownInCatchVariables": true,
+        "noImplicitAny": true,
+        "noImplicitThis": true,
+        "noImplicitReturns": false,
+        "ignoreDeprecations": "6.0",
+        "plugins": [
+            {
+                "name": "typescript-plugin-css-modules",
+                "options": {
+                    "classnameTransform": "camelCase"
+                }
+            }
+        ],
+        "baseUrl": ".",
+        "paths": {
+            "@/*": [
+                "src/*"
+            ]
+        }
+    },
+    "include": [
+        "**/*.mjs",
+        "**/*.ts",
+        "**/*.tsx"
+    ],
+    "exclude": [
+        "**/node_modules"
+    ]
+}
